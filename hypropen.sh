@@ -1,47 +1,100 @@
 #!/usr/bin/env bash
 
-# clear the workspaces we need to use
-# move windows occupying a workspace (between 1 and 4) to <workspace> + 4
+workspace_file=$1
+remove_previous_windows=$(grep "removePreviousWindows" $workspace_file | cut -d "=" -f2-) 
+reserved_workspaces=( $(grep -oP '^\[Workspace\s+\K\d+' $workspace_file) )
+used_monitors=( $(grep -oP "^monitor\K\d+" $workspace_file) )
 
-for ws in 1 2 3 4; do
+declare -a addr_arr
+
+addr_arr_search () {
+    local addr=$1
+    for id in "${addr_arr[@]}"; do
+        if (( $addr == $id )); then
+            return 0
+        fi
+    done
+    return 1
+}
+
+check_for_new_addr () {
+    for addr in $(hyprctl clients -j | jq -r \ '.[] | .address'); do
+        if ! addr_arr_search "$addr"; then
+            return 1
+        fi
+    done
+    return 0
+}
+
+
+launch_window () {
+    local ws=$1
+    shift
+    local cmd=("$@")
+    local -a new_addrs=()
+
+    hyprctl dispatch exec "sh -c $(printf '%q ' "${cmd[@]}")"
+
+    counter=0
+
+    while check_for_new_addr; do
+        sleep 0.1
+        if (( counter >= 10 )); then
+            echo broke out of loop
+            break;
+        fi
+        ((counter++))    
+    done
+
+    for addr in $(hyprctl clients -j | jq -r \ '.[] | .address'); do
+        if ! addr_arr_search "$addr"; then
+            new_addrs+=("$addr")
+        fi
+    done
+    
+    echo new_addrs: "${new_addrs[*]}"
+
+    for addr in "${new_addrs[@]}"; do
+        hyprctl dispatch movetoworkspacesilent "$ws,address:$addr"
+        echo "presumably moved $addr to workspace $ws"
+    done
+}
+
+
+for ws in ${reserved_workspaces[@]}; do
     hyprctl clients -j |
     jq -r --argjson ws "$ws" \
-       '.[] | select(.workspace.id == $ws) | .pid' |
-    while IFS= read -r pid; do
-        hyprctl dispatch movetoworkspacesilent $((ws + 4)),pid:$pid
+       '.[] | select(.workspace.id == $ws) | .address' |
+    while IFS= read -r address; do
+        if [[ $remove_previous_windows == false ]]; then
+            hyprctl dispatch movetoworkspacesilent $((ws + 4)),address:$address
+        else
+            hyprctl dispatch killwindow address:$address
+        fi
     done
 done
 
-
-#
-hyprctl keyword windowrulev2 "workspace 1, class:^(alacritty)$"
-hyprctl keyword windowrulev2 "workspace 2, class:^(chromium)$"
-hyprctl keyword windowrulev2 "workspace 3, class:^(chrome-web.whatsapp.com__-Default)$"
-hyprctl keyword windowrulev2 "workspace 4, class:^(chrome-music.apple.com__de_home-Default)$"
+addr_arr=( $(hyprctl clients -j | jq -r \ '.[] | .address') )
 
 
-# open the desired windows
+for ws in "${reserved_workspaces[@]}"; do
+    mapfile -t ws_lines < <(
+        awk -v ws="$ws" '
+        $0 ~ "^\\[Workspace " ws "\\]" { in_ws=1; next }
+        /^\[/                         { in_ws=0 }
+        in_ws && NF                   { print }
+        ' "$workspace_file"
+    )
 
-hyprctl dispatch workspace 1
-hyprctl dispatch exec alacritty
-hyprctl dispatch exec omarchy-launch-or-focus-webapp WhatsApp "https://web.whatsapp.com/"
-hyprctl dispatch exec omarchy-launch-or-focus-webapp AppleMusic "https://music.apple.com/de/home"
-hyprctl dispatch exec omarchy-launch-browser
+    for cmd in "${ws_lines[@]}"; do
+        echo $cmd
+        launch_window "$ws" "$cmd"
+        addr_arr=($(hyprctl clients -j | jq -r \ '.[] | .address'))
+    done
+done
 
-hyprctl dispatch moveworkspacetomonitor 1 0
-sleep 0.2
-hyprctl dispatch moveworkspacetomonitor 3 0
-sleep 0.2
-hyprctl dispatch moveworkspacetomonitor 2 1
-sleep 0.2
-hyprctl dispatch moveworkspacetomonitor 4 1
-sleep 0.2
-hyprctl dispatch workspace 2
-hyprctl dispatch workspace 1
-
-sleep 1
-
-hyprctl keyword windowrulev2 "unset,class:^(alacritty)$"
-hyprctl keyword windowrulev2 "unset,class:^(chromium)$"
-hyprctl keyword windowrulev2 "unset,class:^(chrome-web.whatsapp.com__-Default)$"
-hyprctl keyword windowrulev2 "unset,class:^(chrome-music.apple.com__de_home-Default)$"
+for mon in ${used_monitors[@]}; do
+    for ws in $(grep "^monitor${mon}=" $workspace_file| cut -d "=" -f2-); do
+        hyprctl dispatch moveworkspacetomonitor $ws $mon
+    done
+done
