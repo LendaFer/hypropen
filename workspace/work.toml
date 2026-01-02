@@ -6,7 +6,6 @@ monitor1=2 4
 
 [Workspace 1]
 alacritty
-omarchy-launch-browser
 
 [Workspace 2]
 omarchy-launch-browser
@@ -14,8 +13,7 @@ omarchy-launch-browser
 
 [Workspace 3]
 omarchy-launch-or-focus-webapp WhatsApp "https://web.whatsapp.com/"
-alacritty
 
 [Workspace 4]
 omarchy-launch-or-focus-webapp AppleMusic "https://music.apple.com/de/home/"
-
+uwsm-app -- thunderbird --mail
